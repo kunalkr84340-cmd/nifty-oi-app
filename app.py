@@ -3,22 +3,22 @@ import plotly.graph_objects as go
 import requests
 import streamlit.components.v1 as components
 
-st.set_page_config(page_title="Nifty OI Scalper", layout="wide")
+st.set_page_config(page_title="Nifty OI & Candle Scalper", layout="wide")
 
-# --- Auto Refresh Script (10 Seconds for IP Safety) ---
+# --- Auto Refresh Script (10 Seconds) ---
 components.html(
     """
     <script>
         setTimeout(function(){
             window.parent.postMessage({type: 'streamlit:render'}, '*');
             window.parent.location.reload();
-        }, 10000); // 10 Seconds Reload
+        }, 10000);
     </script>
     """,
     height=0,
 )
 
-st.title("🎯 Nifty Live OI Scalper")
+st.title("🎯 Nifty Live OI & Candle Scalper")
 
 @st.cache_data(ttl=8)
 def get_live_nse_data():
@@ -33,7 +33,6 @@ def get_live_nse_data():
     try:
         session.get("https://www.nseindia.com", headers=headers, timeout=3)
         response = session.get(url, headers=headers, timeout=3)
-        
         if response.status_code != 200:
             return None, None, None, None, "Blocked"
             
@@ -62,9 +61,9 @@ def get_live_nse_data():
 
 spot_price, call_wall, pivot_level, put_wall, error = get_live_nse_data()
 
-# Status Banner & Controls
+# Manual Fallback inputs if server is busy
 if error or spot_price is None:
-    st.info("💡 NSE Live Auto-Fetch Busy (IP Restriction). Using Manual Inputs below:")
+    st.info("💡 NSE Live Busy (IP Restriction). Using Inputs below:")
     col_a, col_b = st.columns(2)
     with col_a:
         spot_price = st.number_input("Nifty Spot Price", value=22635.0, step=0.5)
@@ -75,20 +74,34 @@ if error or spot_price is None:
 else:
     st.success(f"⚡ Live NSE Connected! Nifty Spot: **{spot_price}**")
 
+# --- Candle Pattern Selection ---
+st.subheader("🕯️ 5-Minute Candle Pattern Selector")
+candle_pattern = st.selectbox(
+    "Live Candle Pattern kaunsa bana hai?",
+    ["None / Normal Candle", "Bullish Pin Bar (Hammer) 🔨", "Bearish Pin Bar (Shooting Star) ☄️", "Bullish Engulfing 🟢", "Bearish Engulfing 🔴"]
+)
+
 # Metrics Display
 col1, col2, col3 = st.columns(3)
 col1.metric("Call Wall (Resistance)", f"{call_wall}")
 col2.metric("Pivot Zone", f"{pivot_level}")
 col3.metric("Put Wall (Support)", f"{put_wall}")
 
-# Signal Logic
-st.subheader("📊 Live Signal Alert")
+# Enhanced Trade Action Signal
+st.subheader("📊 Trade Action & Entry Signal")
+
 if spot_price > pivot_level:
-    st.success("🟢 BULLISH ZONE: Price holding above Pivot. Look for CALL Buy.")
+    if "Bullish" in candle_pattern:
+        st.success(f"🔥 HIGH CONVICTION CALL BUY!\n\n• Trend: Bullish Zone (Above {pivot_level})\n• Pattern: {candle_pattern}\n• Target: {call_wall} | SL: {spot_price - 15}")
+    else:
+        st.info(f"🟢 BULLISH ZONE: Price Pivot ke upar hai. Dip par CALL Buy ka setup dekho. (Pattern Confirmation: {candle_pattern})")
 elif spot_price < pivot_level:
-    st.error("🔴 BEARISH ZONE: Price below Pivot. Look for PUT Buy.")
+    if "Bearish" in candle_pattern:
+        st.error(f"🔥 HIGH CONVICTION PUT BUY!\n\n• Trend: Bearish Zone (Below {pivot_level})\n• Pattern: {candle_pattern}\n• Target: {put_wall} | SL: {spot_price + 15}")
+    else:
+        st.warning(f"🔴 BEARISH ZONE: Price Pivot ke niche hai. Bounce par PUT Buy ka setup dekho. (Pattern Confirmation: {candle_pattern})")
 else:
-    st.warning("⚠️ NEUTRAL ZONE: Rangebound market.")
+    st.warning("⚠️ NEUTRAL ZONE: Market Rangebound hai. Breakout ya Rejection ka wait karo.")
 
 # Visual Chart
 fig = go.Figure()
@@ -108,3 +121,4 @@ fig.add_trace(go.Scatter(
 
 fig.update_layout(height=400, template="plotly_dark", margin=dict(l=20, r=20, t=30, b=20))
 st.plotly_chart(fig, use_container_width=True)
+        

@@ -141,10 +141,20 @@ if active_token:
         m3.metric("Major Put Support", f"{put_wall}")
         
         st.markdown("---")
-        st.subheader("📊 Dynamic Market Observation & Deep Analysis")
         
-        call_build_str = ", ".join([f"**{k} CE (+{v}%)**" for k, v in top_calls])
-        put_build_str = ", ".join([f"**{k} PE (+{v}%)**" for k, v in top_puts])
+        # Live Top Call & Put OI Build-ups (Always Visible Side-by-Side)
+        st.subheader("🔥 Live OI Change Spikes")
+        call_build_str = "\n".join([f"• **{k} CE**: +{v}%" for k, v in top_calls])
+        put_build_str = "\n".join([f"• **{k} PE**: +{v}%" for k, v in top_puts])
+        
+        col_call, col_put = st.columns(2)
+        with col_call:
+            st.error(f"🔴 **Top Call OI Build-ups:**\n\n{call_build_str}")
+        with col_put:
+            st.success(f"🟢 **Top Put OI Build-ups:**\n\n{put_build_str}")
+            
+        st.markdown("---")
+        st.subheader("📊 Dynamic Market Observation & Shift Analysis")
         
         # Signal Generation Logic & Lock Target/SL
         if tot_call_pct > tot_put_pct * 1.3:
@@ -157,8 +167,8 @@ if active_token:
             
             st.error(
                 f"🔴 **Call Writing Heavy Dynamic Shift Detected:**\n"
-                f"• Call side par aggressive build-up ho gaya hai: {call_build_str}.\n"
-                f"• Above levels completely block ho rahe hain aur market par **Bearish Pressure** haavi hai."
+                f"• Call side par aggressive build-up haavi hai.\n"
+                f"• Above levels completely block ho rahe hain aur market par **Bearish Pressure** bana hua hai."
             )
         elif tot_put_pct > tot_call_pct * 1.3:
             current_signal = "BULLISH (CALL BUY)"
@@ -170,8 +180,8 @@ if active_token:
             
             st.success(
                 f"🟢 **Put Writing Strong Dynamic Shift Detected:**\n"
-                f"• Put side par aggressive build-up ho raha hai: {put_build_str}.\n"
-                f"• Lower levels par strong support mil raha hai aur market par **Bullish Momentum** haavi hai."
+                f"• Put side par aggressive build-up ho raha hai.\n"
+                f"• Lower levels par strong support mil raha hai aur market par **Bullish Momentum** bana hua hai."
             )
         else:
             current_signal = "NEUTRAL"

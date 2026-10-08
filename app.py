@@ -1,7 +1,7 @@
 import streamlit as st
 import plotly.graph_objects as go
 import requests
-import streamlit.components.v1 as components
+import time
 
 st.set_page_config(page_title="Nifty Smart OI Analyst Engine", layout="wide")
 
@@ -19,21 +19,9 @@ if st.sidebar.button("Connect & Permanent Save"):
 
 active_token = query_params.get("token", "")
 
-if active_token:
-    components.html(
-        """
-        <script>
-            setTimeout(function(){
-                window.parent.location.reload();
-            }, 5000);
-        </script>
-        """,
-        height=0,
-    )
-
 st.title("🎯 Nifty Live Smart Dynamic Analyst Engine")
 
-@st.cache_data(ttl=3)
+@st.cache_data(ttl=5)
 def fetch_and_analyze_upstox_data(token):
     headers = {
         'Accept': 'application/json',
@@ -143,7 +131,7 @@ if active_token:
         
         pivot_level = (call_wall + put_wall) / 2
         
-        st.success(f"⚡ Live Connected! Nifty Spot Price: **{spot}** (Auto Refreshing 5s)")
+        st.success(f"⚡ Live Connected! Nifty Spot Price: **{spot}**")
         
         # Metrics Row
         m1, m2, m3 = st.columns(3)
@@ -154,7 +142,6 @@ if active_token:
         st.markdown("---")
         st.subheader("📊 Dynamic Market Observation & Deep Analysis")
         
-        # Build Text Dynamic Commentary
         call_build_str = ", ".join([f"**{k} CE (+{v}%)**" for k, v in top_calls])
         put_build_str = ", ".join([f"**{k} PE (+{v}%)**" for k, v in top_puts])
         
@@ -205,6 +192,10 @@ if active_token:
         fig.add_trace(go.Scatter(x=["Spot"], y=[spot], mode="markers+text", text=[f"{spot}"], marker=dict(color="cyan", size=18)))
         fig.update_layout(height=380, template="plotly_dark", margin=dict(l=20, r=20, t=30, b=20))
         st.plotly_chart(fig, use_container_width=True)
+
+        # Smooth Streamlit Auto-refresh without full page reload
+        time.sleep(8)
+        st.rerun()
 
 else:
     st.info("👈 Left Sidebar mein apna **Upstox Access Token** paste karke **'Connect & Permanent Save'** dabaayein.")

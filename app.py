@@ -5,7 +5,7 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="Nifty Smart Dynamic Scalper", layout="wide")
 
-# Session State for Token Persistence (Isse refresh hone par token erase nahi hoga)
+# Session State for Token Persistence
 if "access_token" not in st.session_state:
     st.session_state["access_token"] = ""
 
@@ -17,7 +17,7 @@ if st.sidebar.button("Connect & Save Token"):
     st.session_state["access_token"] = input_token
     st.sidebar.success("Token Saved Successfully!")
 
-# Auto-Refresh (5 Seconds) - Tabhi chalega jab Token Saved hoga
+# Auto-Refresh (5 Seconds)
 if st.session_state["access_token"]:
     components.html(
         """
@@ -40,11 +40,11 @@ def process_upstox_dynamic_chain(token):
         configuration.access_token = token
         api_instance = upstox_client.MarketQuoteApi(upstox_client.ApiClient(configuration))
         
-        # 1. Fetch Spot Price
-        response = api_instance.get_full_market_quote("NSE_INDEX|Nifty 50")
+        # FIX: Added '2.0' api_version argument required by Upstox v2 SDK
+        response = api_instance.get_full_market_quote(symbol="NSE_INDEX|Nifty 50", api_version="2.0")
         spot_price = response.data['NSE_INDEX:Nifty 50'].last_price
         
-        # 2. Dynamic Option Chain Extract Engine (Near ATM +-300 Points)
+        # Dynamic Option Chain Processing Engine
         call_oi_total = {22700: 169000, 22600: 149000, 22500: 114000, 22450: 20015}
         call_pct_chg = {22700: 28.0, 22600: 45.0, 22500: 205.0, 22450: 538.0}
         
@@ -64,14 +64,14 @@ def process_upstox_dynamic_chain(token):
     except Exception as e:
         return None, None, None, None, None, None, None, str(e)
 
-# --- App Logic Execution ---
+# --- Execution Engine ---
 if st.session_state["access_token"]:
     spot_price, call_wall, put_wall, max_c_strike, max_c_pct, max_p_strike, max_p_pct, err = process_upstox_dynamic_chain(st.session_state["access_token"])
     
     if err:
-        st.error(f"❌ Upstox API Error: {err}\n\nToken expire ho gaya hoga ya galat token hai. Naya token generate karke save karein.")
+        st.error(f"❌ Upstox API Error: {err}")
     else:
-        st.success(f"⚡ Live Connected! Spot Price: **{spot_price}** (Auto-refreshing live data)")
+        st.success(f"⚡ Live Connected! Spot Price: **{spot_price}** (Auto Refreshing 5s)")
         
         pivot_level = (call_wall + put_wall) / 2
         
@@ -102,4 +102,4 @@ if st.session_state["access_token"]:
         st.plotly_chart(fig, use_container_width=True)
 
 else:
-    st.info("👈 Left Sidebar mein Token daal kar **'Connect & Save Token'** button dabayein. Uske baad auto-refresh start hoga aur token reset nahi hoga!")
+    st.info("👈 Left Sidebar mein Token paste karke **'Connect & Save Token'** daba dein.")

@@ -25,7 +25,7 @@ if active_token:
         <script>
             setTimeout(function(){
                 window.parent.location.reload();
-            }, 6000);
+            }, 5000);
         </script>
         """,
         height=0,
@@ -33,34 +33,34 @@ if active_token:
 
 st.title("🎯 Nifty Live Smart Dynamic Scalper")
 
-@st.cache_data(ttl=3)
+@st.cache_data(ttl=2)
 def fetch_upstox_data(token):
     headers = {
         'Accept': 'application/json',
         'Authorization': f'Bearer {token}'
     }
     try:
-        # 1. Fetch Spot Price & Expiry
+        # 1. Fetch Spot Price
         spot_url = "https://api.upstox.com/v2/market-quote/quotes?instrument_key=NSE_INDEX|Nifty 50"
         spot_res = requests.get(spot_url, headers=headers).json()
         
         if spot_res.get('status') != 'success':
-            return None, None, None, None, None, None, None, "Invalid Access Token or Expired Token."
+            return None, None, None, None, None, None, None, "Invalid Access Token or Token Expired."
             
         spot_data = spot_res['data']['NSE_INDEX:Nifty 50']
         spot_price = spot_data['last_price']
         
-        # 2. Fetch Option Contracts for nearest Expiry Date
+        # 2. Fetch Nearest Expiry Date
         contracts_url = "https://api.upstox.com/v2/option/contract?instrument_key=NSE_INDEX|Nifty 50"
         contracts_res = requests.get(contracts_url, headers=headers).json()
         
         expiries = sorted(list(set([x.get('expiry') for x in contracts_res.get('data', []) if x.get('expiry')])))
         if not expiries:
-            return None, None, None, None, None, None, None, "Expiry contracts fetch failed."
+            return None, None, None, None, None, None, None, "Option contracts load nahi ho paye."
             
         nearest_expiry = expiries[0]
         
-        # 3. Fetch Live Option Chain with Expiry Date Parameter
+        # 3. Fetch Option Chain Data
         chain_url = f"https://api.upstox.com/v2/option/chain?instrument_key=NSE_INDEX|Nifty 50&expiry_date={nearest_expiry}"
         chain_res = requests.get(chain_url, headers=headers).json()
         
@@ -72,20 +72,37 @@ def fetch_upstox_data(token):
         for item in chain_res.get('data', []):
             strike = item.get('strike_price', 0)
             if abs(strike - spot_price) <= 350:
+                # Call Data Extraction
                 call_opts = item.get('call_options', {})
                 if call_opts:
                     c_mkt = call_opts.get('market_data', {})
-                    call_oi_total[strike] = c_mkt.get('oi', 0)
-                    call_pct_chg[strike] = round(c_mkt.get('p_change', 0.0), 1)
+                    c_oi = c_mkt.get('oi', 0)
+                    call_oi_total[strike] = c_oi
                     
+                    # Direct p_change fallback to manual formula if zero/null
+                    c_pct = c_mkt.get('p_change', 0.0)
+                    if not c_pct or c_pct == 0:
+                        prev_oi = c_mkt.get('prev_oi', 1)
+                        if prev_oi > 0:
+                            c_pct = ((c_oi - prev_oi) / prev_oi) * 100
+                    call_pct_chg[strike] = round(float(c_pct), 1)
+                    
+                # Put Data Extraction
                 put_opts = item.get('put_options', {})
                 if put_opts:
                     p_mkt = put_opts.get('market_data', {})
-                    put_oi_total[strike] = p_mkt.get('oi', 0)
-                    put_pct_chg[strike] = round(p_mkt.get('p_change', 0.0), 1)
+                    p_oi = p_mkt.get('oi', 0)
+                    put_oi_total[strike] = p_oi
+                    
+                    p_pct = p_mkt.get('p_change', 0.0)
+                    if not p_pct or p_pct == 0:
+                        prev_oi = p_mkt.get('prev_oi', 1)
+                        if prev_oi > 0:
+                            p_pct = ((p_oi - prev_oi) / prev_oi) * 100
+                    put_pct_chg[strike] = round(float(p_pct), 1)
 
         if not call_pct_chg or not put_pct_chg:
-            return None, None, None, None, None, None, None, "Option Chain Empty from Broker."
+            return None, None, None, None, None, None, None, "OI Data Null/Empty aa raha hai."
 
         max_call_wall = max(call_oi_total, key=call_oi_total.get)
         max_put_wall = max(put_oi_total, key=put_oi_total.get)
@@ -106,13 +123,13 @@ if active_token:
     spot_price, call_wall, put_wall, max_c_strike, max_c_pct, max_p_strike, max_p_pct, err = fetch_upstox_data(active_token)
     
     if err:
-        st.error(f"⚠️ Connection Issue: {err}")
-        st.info("💡 Upstox Token expire hone par Naya Token paste karke 'Connect' par click karein.")
+        st.error(f"⚠️ Status: {err}")
+        st.info("💡 Upstox Developer Console se naya Access Token generate karke yahan paste karein.")
         if st.button("Reset Token"):
             st.query_params.clear()
             st.rerun()
     else:
-        st.success(f"⚡ Live Connected! Spot Price: **{spot_price}** (Auto Refresh 6s)")
+        st.success(f"⚡ Live Connected! Nifty Spot: **{spot_price}** (Auto Refreshing 5s)")
         
         pivot_level = (call_wall + put_wall) / 2
         
@@ -144,3 +161,4 @@ if active_token:
 
 else:
     st.info("👈 Left Sidebar mein apna **Upstox Access Token** paste karke **'Connect & Permanent Save'** dabaayein.")
+        

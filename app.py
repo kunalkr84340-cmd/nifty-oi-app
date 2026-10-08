@@ -5,27 +5,32 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="Nifty Smart Dynamic Scalper", layout="wide")
 
-# Session State for Token Persistence
-if "access_token" not in st.session_state:
-    st.session_state["access_token"] = ""
+# --- URL Query Parameters se Token Load/Save Logic ---
+query_params = st.query_params
 
-# --- Sidebar Setup ---
+# Current saved token check in URL
+current_token = query_params.get("token", "")
+
 st.sidebar.header("⚙️ Upstox API Connection")
-input_token = st.sidebar.text_input("🔑 Upstox Access Token Paste Karein", value=st.session_state["access_token"], type="password")
+input_token = st.sidebar.text_input("🔑 Upstox Access Token Paste Karein", value=current_token, type="password")
 
-if st.sidebar.button("Connect & Save Token"):
-    st.session_state["access_token"] = input_token
-    st.sidebar.success("Token Saved Successfully!")
+if st.sidebar.button("Connect & Permanent Save"):
+    if input_token:
+        st.query_params["token"] = input_token
+        st.sidebar.success("✅ Token Saved Permanently in URL!")
+        st.rerun()
 
-# Auto-Refresh (5 Seconds)
-if st.session_state["access_token"]:
+# Use token from URL if available
+active_token = query_params.get("token", "")
+
+# Auto-Refresh Script (Runs ONLY when Token is active)
+if active_token:
     components.html(
         """
         <script>
             setTimeout(function(){
-                window.parent.postMessage({type: 'streamlit:render'}, '*');
                 window.parent.location.reload();
-            }, 5000);
+            }, 6000);
         </script>
         """,
         height=0,
@@ -33,18 +38,18 @@ if st.session_state["access_token"]:
 
 st.title("🎯 Nifty Live Smart Dynamic Scalper")
 
-@st.cache_data(ttl=3)
+@st.cache_data(ttl=4)
 def process_upstox_dynamic_chain(token):
     try:
         configuration = upstox_client.Configuration()
         configuration.access_token = token
         api_instance = upstox_client.MarketQuoteApi(upstox_client.ApiClient(configuration))
         
-        # FIX: Added '2.0' api_version argument required by Upstox v2 SDK
+        # Fixed v2 API call with explicit api_version
         response = api_instance.get_full_market_quote(symbol="NSE_INDEX|Nifty 50", api_version="2.0")
         spot_price = response.data['NSE_INDEX:Nifty 50'].last_price
         
-        # Dynamic Option Chain Processing Engine
+        # Dynamic Option Chain Parsing Engine
         call_oi_total = {22700: 169000, 22600: 149000, 22500: 114000, 22450: 20015}
         call_pct_chg = {22700: 28.0, 22600: 45.0, 22500: 205.0, 22450: 538.0}
         
@@ -65,13 +70,16 @@ def process_upstox_dynamic_chain(token):
         return None, None, None, None, None, None, None, str(e)
 
 # --- Execution Engine ---
-if st.session_state["access_token"]:
-    spot_price, call_wall, put_wall, max_c_strike, max_c_pct, max_p_strike, max_p_pct, err = process_upstox_dynamic_chain(st.session_state["access_token"])
+if active_token:
+    spot_price, call_wall, put_wall, max_c_strike, max_c_pct, max_p_strike, max_p_pct, err = process_upstox_dynamic_chain(active_token)
     
     if err:
-        st.error(f"❌ Upstox API Error: {err}")
+        st.error(f"❌ Upstox API Error: {err}\n\nToken expire ho gaya ho toh naya token dal kar 'Connect & Permanent Save' dabayein.")
+        if st.button("Reset Token"):
+            st.query_params.clear()
+            st.rerun()
     else:
-        st.success(f"⚡ Live Connected! Spot Price: **{spot_price}** (Auto Refreshing 5s)")
+        st.success(f"⚡ Live Connected! Spot Price: **{spot_price}** (Auto Refreshing 6s)")
         
         pivot_level = (call_wall + put_wall) / 2
         
@@ -102,4 +110,5 @@ if st.session_state["access_token"]:
         st.plotly_chart(fig, use_container_width=True)
 
 else:
-    st.info("👈 Left Sidebar mein Token paste karke **'Connect & Save Token'** daba dein.")
+    st.info("👈 Left Sidebar mein Token paste karke **'Connect & Permanent Save'** button dabayein.")
+    

@@ -6,6 +6,16 @@ from datetime import datetime
 
 st.set_page_config(page_title="Nifty Complete Smart Scalper Engine", layout="wide")
 
+# Initialize Session State for Fixed Target/SL Lock
+if 'locked_signal' not in st.session_state:
+    st.session_state.locked_signal = "NEUTRAL"
+if 'locked_entry' not in st.session_state:
+    st.session_state.locked_entry = None
+if 'locked_sl' not in st.session_state:
+    st.session_state.locked_sl = None
+if 'locked_target' not in st.session_state:
+    st.session_state.locked_target = None
+
 query_params = st.query_params
 current_token = query_params.get("token", "")
 
@@ -22,7 +32,7 @@ active_token = query_params.get("token", "")
 
 st.title("🎯 Nifty Live Smart Dynamic Analyst & Candle Engine")
 
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=3)
 def fetch_complete_market_data(token):
     headers = {
         'Accept': 'application/json',
@@ -37,13 +47,13 @@ def fetch_complete_market_data(token):
             
         spot_price = spot_res['data']['NSE_INDEX:Nifty 50']['last_price']
 
-        # 2. Fetch Live Candles (5 Min Interval)
-        to_date = datetime.now().strftime("%Y-%m-%d")
-        candle_url = f"https://api.upstox.com/v2/historical-candle/NSE_INDEX|Nifty 50/minute/5/{to_date}"
+        # 2. Fetch Live Candles (Intraday 5 Min)
+        today_date = datetime.now().strftime("%Y-%m-%d")
+        candle_url = f"https://api.upstox.com/v2/historical-candle/NSE_INDEX|Nifty 50/minute/5/{today_date}"
         candle_res = requests.get(candle_url, headers=headers).json()
         candles = candle_res.get('data', {}).get('candles', [])
 
-        # 3. Fetch Option Chain for Detailed OI Analysis
+        # 3. Fetch Option Chain
         contracts_url = "https://api.upstox.com/v2/option/contract?instrument_key=NSE_INDEX|Nifty 50"
         contracts_res = requests.get(contracts_url, headers=headers).json()
         expiries = sorted(list(set([x.get('expiry') for x in contracts_res.get('data', []) if x.get('expiry')])))
@@ -60,7 +70,6 @@ def fetch_complete_market_data(token):
             for item in chain_res.get('data', []):
                 strike = item.get('strike_price', 0)
                 if abs(strike - spot_price) <= 400:
-                    # Call Processing
                     c_opts = item.get('call_options', {})
                     if c_opts:
                         c_mkt = c_opts.get('market_data', {})
@@ -72,7 +81,6 @@ def fetch_complete_market_data(token):
                             if prev > 0: c_pct = ((c_oi - prev)/prev)*100
                         call_pct_map[strike] = round(float(c_pct), 1)
                         
-                    # Put Processing
                     p_opts = item.get('put_options', {})
                     if p_opts:
                         p_mkt = p_opts.get('market_data', {})
@@ -102,7 +110,7 @@ def fetch_complete_market_data(token):
     except Exception as e:
         return None, str(e)
 
-# --- App Execution ---
+# --- App Logic ---
 if active_token:
     data, err = fetch_complete_market_data(active_token)
     
@@ -138,15 +146,14 @@ if active_token:
         call_build_str = ", ".join([f"**{k} CE (+{v}%)**" for k, v in top_calls])
         put_build_str = ", ".join([f"**{k} PE (+{v}%)**" for k, v in top_puts])
         
-        # Target/SL & Trade Direction Calculation
-        signal = "NEUTRAL"
-        entry_price, sl_price, target_price = None, None, None
-        
+        # Signal Generation Logic & Lock Target/SL
         if tot_call_pct > tot_put_pct * 1.3:
-            signal = "BEARISH (PUT BUY)"
-            entry_price = spot
-            sl_price = round(spot + 35, 2)
-            target_price = round(spot - 70, 2)
+            current_signal = "BEARISH (PUT BUY)"
+            if st.session_state.locked_signal != "BEARISH (PUT BUY)":
+                st.session_state.locked_signal = "BEARISH (PUT BUY)"
+                st.session_state.locked_entry = spot
+                st.session_state.locked_sl = round(spot + 35, 2)
+                st.session_state.locked_target = round(spot - 70, 2)
             
             st.error(
                 f"🔴 **Call Writing Heavy Dynamic Shift Detected:**\n"
@@ -154,10 +161,12 @@ if active_token:
                 f"• Above levels completely block ho rahe hain aur market par **Bearish Pressure** haavi hai."
             )
         elif tot_put_pct > tot_call_pct * 1.3:
-            signal = "BULLISH (CALL BUY)"
-            entry_price = spot
-            sl_price = round(spot - 35, 2)
-            target_price = round(spot + 70, 2)
+            current_signal = "BULLISH (CALL BUY)"
+            if st.session_state.locked_signal != "BULLISH (CALL BUY)":
+                st.session_state.locked_signal = "BULLISH (CALL BUY)"
+                st.session_state.locked_entry = spot
+                st.session_state.locked_sl = round(spot - 35, 2)
+                st.session_state.locked_target = round(spot + 70, 2)
             
             st.success(
                 f"🟢 **Put Writing Strong Dynamic Shift Detected:**\n"
@@ -165,19 +174,24 @@ if active_token:
                 f"• Lower levels par strong support mil raha hai aur market par **Bullish Momentum** haavi hai."
             )
         else:
+            current_signal = "NEUTRAL"
+            st.session_state.locked_signal = "NEUTRAL"
             st.warning("⚠️ **Rangebound / Neutral Pressure:** Call aur Put dono side barabar spikings hain. Wait for break.")
 
         # Scalp Guidance Strategy
-        st.subheader("🎯 Action Plan & Trade Levels")
-        if entry_price:
-            c1, c2, c3 = st.columns(3)
-            c1.info(f"📍 **Entry Price Zone:** {entry_price}")
-            c2.error(f"🛑 **Stop-Loss Level:** {sl_price}")
-            c3.success(f"🎯 **Target Level:** {target_price}")
+        st.subheader("🎯 Action Plan & Stable Trade Levels")
+        if st.session_state.locked_signal != "NEUTRAL":
+            c1, c2, c3, c4 = st.columns(4)
+            c1.info(f"📍 **Locked Entry:** {st.session_state.locked_entry}")
+            c2.error(f"🛑 **Fixed SL:** {st.session_state.locked_sl}")
+            c3.success(f"🎯 **Fixed Target:** {st.session_state.locked_target}")
+            if c4.button("Reset Trade Levels"):
+                st.session_state.locked_signal = "NEUTRAL"
+                st.rerun()
 
-        # Candlestick Chart Rendering
+        # Live Candlestick Chart Rendering
+        st.subheader("📈 Live 5-Min Candlestick Chart")
         if candles:
-            st.subheader("📈 Live 5-Min Candlestick Chart")
             times = [c[0] for c in candles[:30]][::-1]
             opens = [c[1] for c in candles[:30]][::-1]
             highs = [c[2] for c in candles[:30]][::-1]
@@ -191,24 +205,25 @@ if active_token:
                 name="Nifty 5M"
             )])
 
-            # Target, SL, and Entry Lines
-            if signal != "NEUTRAL":
-                fig.add_hline(y=entry_price, line_color="cyan", line_dash="dash", annotation_text=f"ENTRY ({entry_price})")
-                fig.add_hline(y=sl_price, line_color="red", line_width=2, annotation_text=f"STOP LOSS ({sl_price})")
-                fig.add_hline(y=target_price, line_color="green", line_width=2, annotation_text=f"TARGET ({target_price})")
+            # Plot Fixed Target, SL, and Entry Lines
+            if st.session_state.locked_signal != "NEUTRAL":
+                fig.add_hline(y=st.session_state.locked_entry, line_color="cyan", line_dash="dash", annotation_text=f"ENTRY ({st.session_state.locked_entry})")
+                fig.add_hline(y=st.session_state.locked_sl, line_color="red", line_width=2, annotation_text=f"STOP LOSS ({st.session_state.locked_sl})")
+                fig.add_hline(y=st.session_state.locked_target, line_color="green", line_width=2, annotation_text=f"TARGET ({st.session_state.locked_target})")
             
             fig.update_layout(
-                height=450,
+                height=480,
                 template="plotly_dark",
                 xaxis_rangeslider_visible=False,
                 margin=dict(l=20, r=20, t=30, b=20)
             )
             st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("⏳ Live 5-Min Candles stream load ho rahi hai...")
 
-        # Smooth Auto-Refresh Background Update
+        # Smooth Auto-Refresh
         time.sleep(8)
         st.rerun()
 
 else:
     st.info("👈 Left Sidebar mein apna **Upstox Access Token** paste karke **'Connect & Save'** dabaayein.")
-        

@@ -44,37 +44,54 @@ def fetch_upstox_realtime_option_chain(token):
         # 1. Fetch Nifty Spot Price
         spot_url = "https://api.upstox.com/v2/market-quote/quotes?instrument_key=NSE_INDEX|Nifty 50"
         spot_res = requests.get(spot_url, headers=headers).json()
+        
+        if 'data' not in spot_res or 'NSE_INDEX:Nifty 50' not in spot_res['data']:
+            return None, None, None, None, None, None, None, "Invalid API Response or Expired Token."
+            
         spot_price = spot_res['data']['NSE_INDEX:Nifty 50']['last_price']
         
-        # 2. Fetch Live Option Chain
-        chain_url = f"https://api.upstox.com/v2/option/chain?instrument_key=NSE_INDEX|Nifty 50"
+        # 2. Fetch Active Contracts & Expiry for Nifty
+        chain_url = "https://api.upstox.com/v2/option/chain?instrument_key=NSE_INDEX|Nifty 50"
         chain_res = requests.get(chain_url, headers=headers).json()
         
+        data_list = chain_res.get('data', [])
+        
+        # If primary chain endpoint is empty, try direct contracts query
+        if not data_list:
+            # Secondary auto-fallback for option chain
+            contracts_url = "https://api.upstox.com/v2/option/contract?instrument_key=NSE_INDEX|Nifty 50"
+            contracts_res = requests.get(contracts_url, headers=headers).json()
+            expiries = sorted(list(set([x.get('expiry') for x in contracts_res.get('data', []) if x.get('expiry')])))
+            if expiries:
+                nearest_expiry = expiries[0]
+                chain_url = f"https://api.upstox.com/v2/option/chain?instrument_key=NSE_INDEX|Nifty 50&expiry_date={nearest_expiry}"
+                chain_res = requests.get(chain_url, headers=headers).json()
+                data_list = chain_res.get('data', [])
+
         call_oi_total = {}
         call_pct_chg = {}
         put_oi_total = {}
         put_pct_chg = {}
         
-        if 'data' in chain_res and chain_res['data']:
-            for item in chain_res['data']:
-                strike = item.get('strike_price')
-                
-                # Spot के पास वाले Strikes Filter (ATM +- 350)
-                if abs(strike - spot_price) <= 350:
-                    call_options = item.get('call_options', {})
-                    if call_options and 'market_data' in call_options:
-                        c_data = call_options['market_data']
-                        call_oi_total[strike] = c_data.get('oi', 0)
-                        call_pct_chg[strike] = round(c_data.get('p_change', 0.0), 1)
-                        
-                    put_options = item.get('put_options', {})
-                    if put_options and 'market_data' in put_options:
-                        p_data = put_options['market_data']
-                        put_oi_total[strike] = p_data.get('oi', 0)
-                        put_pct_chg[strike] = round(p_data.get('p_change', 0.0), 1)
-                        
+        for item in data_list:
+            strike = item.get('strike_price', 0)
+            
+            # Filter Strikes near ATM (Spot +- 350)
+            if abs(strike - spot_price) <= 350:
+                call_options = item.get('call_options', {})
+                if call_options:
+                    c_market = call_options.get('market_data', {})
+                    call_oi_total[strike] = c_market.get('oi', 0)
+                    call_pct_chg[strike] = round(c_market.get('p_change', 0.0), 1)
+                    
+                put_options = item.get('put_options', {})
+                if put_options:
+                    p_market = put_options.get('market_data', {})
+                    put_oi_total[strike] = p_market.get('oi', 0)
+                    put_pct_chg[strike] = round(p_market.get('p_change', 0.0), 1)
+
         if not call_pct_chg or not put_pct_chg:
-            return None, None, None, None, None, None, None, "Option chain data empty from broker."
+            return None, None, None, None, None, None, None, "Option chain list is currently empty. Check market hours or API access permissions."
 
         max_call_wall = max(call_oi_total, key=call_oi_total.get)
         max_put_wall = max(put_oi_total, key=put_oi_total.get)
@@ -95,8 +112,9 @@ if active_token:
     spot_price, call_wall, put_wall, max_c_strike, max_c_pct, max_p_strike, max_p_pct, err = fetch_upstox_realtime_option_chain(active_token)
     
     if err:
-        st.error(f"❌ Upstox Live API Sync Error: {err}")
-        if st.button("Reset Token"):
+        st.error(f"⚠️ Upstox Live Sync Note: {err}")
+        st.info("💡 Tip: Agar token subah generate kiya tha, toh Upstox Developer Console se Naya Token Regenerate karke paste karein.")
+        if st.button("Reset Saved Token"):
             st.query_params.clear()
             st.rerun()
     else:

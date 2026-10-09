@@ -5,9 +5,9 @@ import requests
 import time
 from datetime import datetime
 
-st.set_page_config(page_title="Nifty Smart Scalper & Signal Tracker Engine", layout="wide")
+st.set_page_config(page_title="Nifty Smart Scalper Engine", layout="wide")
 
-# Initialize Session State for Fixed Target/SL Lock & Signal Tracker
+# Initialize Session State
 if 'locked_signal' not in st.session_state:
     st.session_state.locked_signal = "NEUTRAL"
 if 'locked_entry' not in st.session_state:
@@ -33,7 +33,7 @@ if st.sidebar.button("Connect & Save"):
 
 active_token = query_params.get("token", "")
 
-st.title("🎯 Nifty Live Smart Scalper & Signal Tracker Engine")
+st.title("🎯 Nifty Live Smart Scalper Engine")
 
 @st.cache_data(ttl=3)
 def fetch_complete_market_data(token):
@@ -146,7 +146,15 @@ if active_token:
         
         st.success(f"⚡ Live Connected! Nifty Spot Price: **{spot}**")
         
-        # Performance Tracker Banner
+        # 📌 MAIN LEVEL METRICS (Top Priority - High Visibility)
+        m1, m2, m3 = st.columns(3)
+        m1.metric(label="🔴 Major Call Resistance", value=f"{call_wall}")
+        m2.metric(label="🎯 Calculated Pivot Level", value=f"{pivot_level}")
+        m3.metric(label="🟢 Major Put Support", value=f"{put_wall}")
+        
+        st.markdown("---")
+
+        # Live Signal Performance Scorecard
         history = st.session_state.trade_history
         total_trades = len(history)
         targets_hit = len([t for t in history if t['Status'] == 'TARGET HIT 🎯'])
@@ -269,3 +277,4 @@ if active_token:
 
 else:
     st.info("👈 Left Sidebar mein apna Upstox Access Token paste karke Connect karein.")
+    

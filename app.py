@@ -277,4 +277,53 @@ if active_token:
 
 else:
     st.info("👈 Left Sidebar mein apna Upstox Access Token paste karke Connect karein.")
-    
+    # --- UNWINDING SIGNAL DETECTOR (Added Safely) ---
+
+def get_trading_signal(df, spot_price):
+    try:
+        atm_strike = round(spot_price / 50) * 50
+        relevant_df = df[(df['strikePrice'] >= atm_strike - 150) & (df['strikePrice'] <= atm_strike + 150)].copy()
+        
+        call_unwind_count = 0
+        put_unwind_count = 0
+        
+        for index, row in relevant_df.iterrows():
+            ce_oi_chg = row.get('ce_oi_change', 0)
+            pe_oi_chg = row.get('pe_oi_change', 0)
+            ce_price_chg = row.get('ce_price_change', 0)
+            pe_price_chg = row.get('pe_price_change', 0)
+            
+            if ce_oi_chg < 0 and ce_price_chg > 0:
+                call_unwind_count += 1
+                
+            if pe_oi_chg < 0 and pe_price_chg > 0:
+                put_unwind_count += 1
+                
+        if call_unwind_count > put_unwind_count:
+            return "🟢 BUY CALL (CE) - Call Unwinding Detected! Market upar ja sakta hai.", "success"
+        elif put_unwind_count > call_unwind_count:
+            return "🔴 BUY PUT (PE) - Put Unwinding Detected! Market niche gir sakta hai.", "error"
+        else:
+            return "⚪ SIDEWAYS / WAIT - Filhal koi clear unwinding signal nahi hai.", "info"
+            
+    except Exception as e:
+        return f"⚠️ Signal check error: {str(e)}", "warning"
+
+# Dashboard Display Section (File ke sabse niche ye dikhega)
+st.markdown("---")
+st.markdown("### 🎯 Live Trade Signal (Unwinding Based)")
+
+# Dhyan de: yahan 'df' aur 'spot_price' wahi variable hone chahiye jo tere code me live use ho rahe hain
+if 'df' in locals() and 'spot_price' in locals():
+    signal_text, signal_type = get_trading_signal(df, spot_price)
+    if signal_type == "success":
+        st.success(signal_text)
+    elif signal_type == "error":
+        st.error(signal_text)
+    elif signal_type == "warning":
+        st.warning(signal_text)
+    else:
+        st.info(signal_text)
+else:
+    st.info("Live data variables load ho rahe hain...")
+        

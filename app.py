@@ -5,9 +5,9 @@ import requests
 import time
 from datetime import datetime
 
-st.set_page_config(page_title="Nifty Smart Scalper Engine", layout="wide")
+st.set_page_config(page_title="Nifty Complete Smart Scalper Engine", layout="wide")
 
-# Initialize Session State
+# Session State for Target/SL Lock
 if 'locked_signal' not in st.session_state:
     st.session_state.locked_signal = "NEUTRAL"
 if 'locked_entry' not in st.session_state:
@@ -16,8 +16,6 @@ if 'locked_sl' not in st.session_state:
     st.session_state.locked_sl = None
 if 'locked_target' not in st.session_state:
     st.session_state.locked_target = None
-if 'trade_history' not in st.session_state:
-    st.session_state.trade_history = []
 
 query_params = st.query_params
 current_token = query_params.get("token", "")
@@ -33,7 +31,39 @@ if st.sidebar.button("Connect & Save"):
 
 active_token = query_params.get("token", "")
 
-st.title("🎯 Nifty Live Smart Scalper Engine")
+# --- UNWINDING SIGNAL FUNCTION ---
+def get_trading_signal(df, spot_price):
+    try:
+        atm_strike = round(spot_price / 50) * 50
+        relevant_df = df[(df['Strike Price'] >= atm_strike - 150) & (df['Strike Price'] <= atm_strike + 150)].copy()
+        
+        call_unwind_count = 0
+        put_unwind_count = 0
+        
+        for index, row in relevant_df.iterrows():
+            c_pct_str = str(row.get('Call OI Change %', '0')).replace('%', '').replace('+', '')
+            p_pct_str = str(row.get('Put OI Change %', '0')).replace('%', '').replace('+', '')
+            
+            c_pct = float(c_pct_str) if c_pct_str else 0.0
+            p_pct = float(p_pct_str) if p_pct_str else 0.0
+            
+            if c_pct < 0:
+                call_unwind_count += 1
+            if p_pct < 0:
+                put_unwind_count += 1
+                
+        if call_unwind_count > put_unwind_count:
+            return "🟢 BUY CALL (CE) - Call Unwinding Detected! Market upar ja sakta hai.", "success"
+        elif put_unwind_count > call_unwind_count:
+            return "🔴 BUY PUT (PE) - Put Unwinding Detected! Market niche gir sakta hai.", "error"
+        else:
+            return "⚪ SIDEWAYS / WAIT - Filhal koi clear unwinding signal nahi hai.", "info"
+            
+    except Exception as e:
+        return f"⚠️ Signal check error: {str(e)}", "warning"
+
+
+st.title("🎯 Nifty Live Smart Dynamic Analyst & Multi-OI Engine")
 
 @st.cache_data(ttl=3)
 def fetch_complete_market_data(token):
@@ -42,7 +72,6 @@ def fetch_complete_market_data(token):
         'Authorization': f'Bearer {token}'
     }
     try:
-        # 1. Fetch Spot Price
         spot_url = "https://api.upstox.com/v2/market-quote/quotes?instrument_key=NSE_INDEX|Nifty 50"
         spot_res = requests.get(spot_url, headers=headers).json()
         if spot_res.get('status') != 'success':
@@ -50,13 +79,11 @@ def fetch_complete_market_data(token):
             
         spot_price = spot_res['data']['NSE_INDEX:Nifty 50']['last_price']
 
-        # 2. Fetch Live Candles
         today_date = datetime.now().strftime("%Y-%m-%d")
         candle_url = f"https://api.upstox.com/v2/historical-candle/NSE_INDEX|Nifty 50/minute/5/{today_date}"
         candle_res = requests.get(candle_url, headers=headers).json()
         candles = candle_res.get('data', {}).get('candles', [])
 
-        # 3. Fetch Option Chain
         contracts_url = "https://api.upstox.com/v2/option/contract?instrument_key=NSE_INDEX|Nifty 50"
         contracts_res = requests.get(contracts_url, headers=headers).json()
         expiries = sorted(list(set([x.get('expiry') for x in contracts_res.get('data', []) if x.get('expiry')])))
@@ -74,6 +101,9 @@ def fetch_complete_market_data(token):
             for item in chain_res.get('data', []):
                 strike = item.get('strike_price', 0)
                 if abs(strike - spot_price) <= 250:
+                    c_oi, c_pct = 0, 0.0
+                    p_oi, p_pct = 0, 0.0
+                    
                     c_opts = item.get('call_options', {})
                     if c_opts:
                         c_mkt = c_opts.get('market_data', {})
@@ -82,8 +112,7 @@ def fetch_complete_market_data(token):
                         c_pct = c_mkt.get('p_change', 0.0)
                         if not c_pct or c_pct == 0:
                             prev = c_mkt.get('prev_oi', 1)
-                            if prev > 0:
-                                c_pct = ((c_oi - prev)/prev)*100
+                            if prev > 0: c_pct = ((c_oi - prev)/prev)*100
                         call_pct_map[strike] = round(float(c_pct), 1)
                         
                     p_opts = item.get('put_options', {})
@@ -94,8 +123,7 @@ def fetch_complete_market_data(token):
                         p_pct = p_mkt.get('p_change', 0.0)
                         if not p_pct or p_pct == 0:
                             prev = p_mkt.get('prev_oi', 1)
-                            if prev > 0:
-                                p_pct = ((p_oi - prev)/prev)*100
+                            if prev > 0: p_pct = ((p_oi - prev)/prev)*100
                         put_pct_map[strike] = round(float(p_pct), 1)
 
                     table_data.append({
@@ -125,7 +153,6 @@ def fetch_complete_market_data(token):
     except Exception as e:
         return None, str(e)
 
-# --- App Render ---
 if active_token:
     data, err = fetch_complete_market_data(active_token)
     
@@ -146,98 +173,13 @@ if active_token:
         
         st.success(f"⚡ Live Connected! Nifty Spot Price: **{spot}**")
         
-        # 📌 MAIN LEVEL METRICS (Top Priority - High Visibility)
         m1, m2, m3 = st.columns(3)
-        m1.metric(label="🔴 Major Call Resistance", value=f"{call_wall}")
-        m2.metric(label="🎯 Calculated Pivot Level", value=f"{pivot_level}")
-        m3.metric(label="🟢 Major Put Support", value=f"{put_wall}")
+        m1.metric("Major Call Resistance", f"{call_wall}")
+        m2.metric("Calculated Pivot Level", f"{pivot_level}")
+        m3.metric("Major Put Support", f"{put_wall}")
         
         st.markdown("---")
-
-        # Live Signal Performance Scorecard
-        history = st.session_state.trade_history
-        total_trades = len(history)
-        targets_hit = len([t for t in history if t['Status'] == 'TARGET HIT 🎯'])
-        sl_hit = len([t for t in history if t['Status'] == 'SL HIT 🛑'])
-        win_rate = round((targets_hit / total_trades) * 100, 1) if total_trades > 0 else 0.0
-
-        st.subheader("📊 Live Signal Performance Scorecard")
-        p1, p2, p3, p4 = st.columns(4)
-        p1.metric("Total Signals Generated", f"{total_trades}")
-        p2.metric("Targets Hit (Wins)", f"{targets_hit}", delta=f"{targets_hit} Wins", delta_color="normal")
-        p3.metric("SL Hit (Losses)", f"{sl_hit}", delta=f"-{sl_hit} SL", delta_color="inverse")
-        p4.metric("Strategy Win Rate", f"{win_rate}%")
-
-        st.markdown("---")
-
-        # Live Auto Check Active Trade Status
-        if st.session_state.locked_signal != "NEUTRAL":
-            sig = st.session_state.locked_signal
-            entry = st.session_state.locked_entry
-            target = st.session_state.locked_target
-            sl = st.session_state.locked_sl
-            
-            status_result = None
-            if sig == "BULLISH (CALL BUY)":
-                if spot >= target:
-                    status_result = "TARGET HIT 🎯"
-                elif spot <= sl:
-                    status_result = "SL HIT 🛑"
-            elif sig == "BEARISH (PUT BUY)":
-                if spot <= target:
-                    status_result = "TARGET HIT 🎯"
-                elif spot >= sl:
-                    status_result = "SL HIT 🛑"
-
-            if status_result:
-                st.session_state.trade_history.append({
-                    "Time": datetime.now().strftime("%H:%M:%S"),
-                    "Type": sig,
-                    "Entry": entry,
-                    "Target": target,
-                    "SL": sl,
-                    "Status": status_result
-                })
-                st.session_state.locked_signal = "NEUTRAL"
-                st.rerun()
-
-        # Signal Logic & Locking
-        if tot_call_pct > tot_put_pct * 1.3:
-            if st.session_state.locked_signal == "NEUTRAL":
-                st.session_state.locked_signal = "BEARISH (PUT BUY)"
-                st.session_state.locked_entry = spot
-                st.session_state.locked_sl = round(spot + 35, 2)
-                st.session_state.locked_target = round(spot - 70, 2)
-            st.error("🔴 **Call Writing Heavy Dynamic Shift Detected:** Bearish Pressure haavi hai.")
-        elif tot_put_pct > tot_call_pct * 1.3:
-            if st.session_state.locked_signal == "NEUTRAL":
-                st.session_state.locked_signal = "BULLISH (CALL BUY)"
-                st.session_state.locked_entry = spot
-                st.session_state.locked_sl = round(spot - 35, 2)
-                st.session_state.locked_target = round(spot + 70, 2)
-            st.success("🟢 **Put Writing Strong Dynamic Shift Detected:** Bullish Momentum haavi hai.")
-        else:
-            st.warning("⚠️ **Rangebound / Neutral Pressure:** Wait for break.")
-
-        # Action Plan Status
-        st.subheader("🎯 Active Trade Status")
-        if st.session_state.locked_signal != "NEUTRAL":
-            c1, c2, c3, c4 = st.columns(4)
-            c1.info(f"📍 **Locked Entry:** {st.session_state.locked_entry}")
-            c2.error(f"🛑 **Fixed SL:** {st.session_state.locked_sl}")
-            c3.success(f"🎯 **Fixed Target:** {st.session_state.locked_target}")
-            if c4.button("Reset / Skip Trade"):
-                st.session_state.locked_signal = "NEUTRAL"
-                st.rerun()
-
-        # History Table Display
-        if history:
-            st.subheader("📝 Today's Completed Signal Journal")
-            st.dataframe(pd.DataFrame(history), use_container_width=True, hide_index=True)
-
-        st.markdown("---")
         
-        # Top Spikes & Option Chain Table
         st.subheader("🔥 Top 5 Live OI Spikes (Calls vs Puts)")
         call_build_str = "\n".join([f"• **{k} CE**: +{v}%" for k, v in top_calls])
         put_build_str = "\n".join([f"• **{k} PE**: +{v}%" for k, v in top_puts])
@@ -247,13 +189,57 @@ if active_token:
             st.error(f"🔴 **Top 5 Call OI Build-ups:**\n\n{call_build_str}")
         with col_put:
             st.success(f"🟢 **Top 5 Put OI Build-ups:**\n\n{put_build_str}")
-
+            
         st.markdown("---")
-        st.subheader("📋 ATM Option Chain Overview")
+        
+        # LIVE COMPACT OPTION CHAIN TABLE & UNWINDING SIGNAL INSIDE
+        st.subheader("📋 ATM Option Chain Overview (Spot ±200 Points)")
         if not df.empty:
             st.dataframe(df, use_container_width=True, hide_index=True)
+            
+            # --- YAHAN HAI UNWINDING SIGNAL KA DISPLAY ---
+            st.markdown("### 🎯 Live Unwinding Signal (Kya Kharidein)")
+            signal_text, signal_type = get_trading_signal(df, spot)
+            if signal_type == "success":
+                st.success(signal_text)
+            elif signal_type == "error":
+                st.error(signal_text)
+            elif signal_type == "warning":
+                st.warning(signal_text)
+            else:
+                st.info(signal_text)
 
-        # Candlestick Chart
+        st.markdown("---")
+        st.subheader("📊 Dynamic Market Observation & Shift Analysis")
+        
+        if tot_call_pct > tot_put_pct * 1.3:
+            if st.session_state.locked_signal != "BEARISH (PUT BUY)":
+                st.session_state.locked_signal = "BEARISH (PUT BUY)"
+                st.session_state.locked_entry = spot
+                st.session_state.locked_sl = round(spot + 35, 2)
+                st.session_state.locked_target = round(spot - 70, 2)
+            st.error("🔴 **Call Writing Heavy Dynamic Shift Detected:** Bearish Pressure haavi hai.")
+        elif tot_put_pct > tot_call_pct * 1.3:
+            if st.session_state.locked_signal != "BULLISH (CALL BUY)":
+                st.session_state.locked_signal = "BULLISH (CALL BUY)"
+                st.session_state.locked_entry = spot
+                st.session_state.locked_sl = round(spot - 35, 2)
+                st.session_state.locked_target = round(spot + 70, 2)
+            st.success("🟢 **Put Writing Strong Dynamic Shift Detected:** Bullish Momentum haavi hai.")
+        else:
+            st.session_state.locked_signal = "NEUTRAL"
+            st.warning("⚠️ **Rangebound / Neutral Pressure:** Both sides equal spikings.")
+
+        st.subheader("🎯 Action Plan & Stable Trade Levels")
+        if st.session_state.locked_signal != "NEUTRAL":
+            c1, c2, c3, c4 = st.columns(4)
+            c1.info(f"📍 **Locked Entry:** {st.session_state.locked_entry}")
+            c2.error(f"🛑 **Fixed SL:** {st.session_state.locked_sl}")
+            c3.success(f"🎯 **Fixed Target:** {st.session_state.locked_target}")
+            if c4.button("Reset Trade Levels"):
+                st.session_state.locked_signal = "NEUTRAL"
+                st.rerun()
+
         st.subheader("📈 Live 5-Min Candlestick Chart")
         if candles:
             times = [c[0] for c in candles[:30]][::-1]
@@ -277,53 +263,3 @@ if active_token:
 
 else:
     st.info("👈 Left Sidebar mein apna Upstox Access Token paste karke Connect karein.")
-    # --- UNWINDING SIGNAL DETECTOR (Added Safely) ---
-
-def get_trading_signal(df, spot_price):
-    try:
-        atm_strike = round(spot_price / 50) * 50
-        relevant_df = df[(df['strikePrice'] >= atm_strike - 150) & (df['strikePrice'] <= atm_strike + 150)].copy()
-        
-        call_unwind_count = 0
-        put_unwind_count = 0
-        
-        for index, row in relevant_df.iterrows():
-            ce_oi_chg = row.get('ce_oi_change', 0)
-            pe_oi_chg = row.get('pe_oi_change', 0)
-            ce_price_chg = row.get('ce_price_change', 0)
-            pe_price_chg = row.get('pe_price_change', 0)
-            
-            if ce_oi_chg < 0 and ce_price_chg > 0:
-                call_unwind_count += 1
-                
-            if pe_oi_chg < 0 and pe_price_chg > 0:
-                put_unwind_count += 1
-                
-        if call_unwind_count > put_unwind_count:
-            return "🟢 BUY CALL (CE) - Call Unwinding Detected! Market upar ja sakta hai.", "success"
-        elif put_unwind_count > call_unwind_count:
-            return "🔴 BUY PUT (PE) - Put Unwinding Detected! Market niche gir sakta hai.", "error"
-        else:
-            return "⚪ SIDEWAYS / WAIT - Filhal koi clear unwinding signal nahi hai.", "info"
-            
-    except Exception as e:
-        return f"⚠️ Signal check error: {str(e)}", "warning"
-
-# Dashboard Display Section (File ke sabse niche ye dikhega)
-st.markdown("---")
-st.markdown("### 🎯 Live Trade Signal (Unwinding Based)")
-
-# Dhyan de: yahan 'df' aur 'spot_price' wahi variable hone chahiye jo tere code me live use ho rahe hain
-if 'df' in locals() and 'spot_price' in locals():
-    signal_text, signal_type = get_trading_signal(df, spot_price)
-    if signal_type == "success":
-        st.success(signal_text)
-    elif signal_type == "error":
-        st.error(signal_text)
-    elif signal_type == "warning":
-        st.warning(signal_text)
-    else:
-        st.info(signal_text)
-else:
-    st.info("Live data variables load ho rahe hain...")
-        

@@ -31,14 +31,14 @@ if st.sidebar.button("Connect & Save"):
 
 active_token = query_params.get("token", "")
 
-# --- UNWINDING + VOLUME SIGNAL FUNCTION ---
+# --- UNWINDING + VOLUME + BID PRESSURE SIGNAL FUNCTION ---
 def get_trading_signal(df, spot_price):
     try:
         atm_strike = round(spot_price / 50) * 50
         relevant_df = df[(df['Strike Price'] >= atm_strike - 150) & (df['Strike Price'] <= atm_strike + 150)].copy()
         
-        call_unwind_count = 0
-        put_unwind_count = 0
+        call_score = 0
+        put_score = 0
         
         for index, row in relevant_df.iterrows():
             c_pct_str = str(row.get('Call OI Change %', '0')).replace('%', '').replace('+', '')
@@ -47,18 +47,27 @@ def get_trading_signal(df, spot_price):
             c_pct = float(c_pct_str) if c_pct_str else 0.0
             p_pct = float(p_pct_str) if p_pct_str else 0.0
             
-            # Unwinding with Volume weightage logic
+            c_bid = float(row.get('Call Bid Qty', 0))
+            p_bid = float(row.get('Put Bid Qty', 0))
+            
+            # Unwinding + Bid Pressure Logic
             if c_pct < 0:
-                call_unwind_count += 1
+                call_score += 1
             if p_pct < 0:
-                put_unwind_count += 1
+                put_score += 1
                 
-        if call_unwind_count > put_unwind_count:
-            return "🟢 BUY CALL (CE) - Call Unwinding + Volume Spike Detected!", "success"
-        elif put_unwind_count > call_unwind_count:
-            return "🔴 BUY PUT (PE) - Put Unwinding + Volume Spike Detected!", "error"
+            # Bid-side heavy weightage
+            if c_bid > p_bid * 1.2:
+                call_score += 1
+            elif p_bid > c_bid * 1.2:
+                put_score += 1
+                
+        if call_score > put_score:
+            return "🟢 BUY CALL (CE) - Call Unwinding + Heavy Call Bids Detected!", "success"
+        elif put_score > call_score:
+            return "🔴 BUY PUT (PE) - Put Unwinding + Heavy Put Bids Detected!", "error"
         else:
-            return "⚪ SIDEWAYS / WAIT - Filhal clear volume/unwinding signal nahi hai.", "info"
+            return "⚪ SIDEWAYS / TUG-OF-WAR - Dono taraf barabar pressure hai, wait karein.", "info"
             
     except Exception as e:
         return f"⚠️ Signal check error: {str(e)}", "warning"
@@ -102,14 +111,15 @@ def fetch_complete_market_data(token):
             for item in chain_res.get('data', []):
                 strike = item.get('strike_price', 0)
                 if abs(strike - spot_price) <= 250:
-                    c_oi, c_pct, c_vol = 0, 0.0, 0
-                    p_oi, p_pct, p_vol = 0, 0.0, 0
+                    c_oi, c_pct, c_vol, c_bid = 0, 0.0, 0, 0
+                    p_oi, p_pct, p_vol, p_bid = 0, 0.0, 0, 0
                     
                     c_opts = item.get('call_options', {})
                     if c_opts:
                         c_mkt = c_opts.get('market_data', {})
                         c_oi = c_mkt.get('oi', 0)
                         c_vol = c_mkt.get('volume', 0)
+                        c_bid = c_mkt.get('bid_qty', 0)
                         call_oi_map[strike] = c_oi
                         c_pct = c_mkt.get('p_change', 0.0)
                         if not c_pct or c_pct == 0:
@@ -122,6 +132,7 @@ def fetch_complete_market_data(token):
                         p_mkt = p_opts.get('market_data', {})
                         p_oi = p_mkt.get('oi', 0)
                         p_vol = p_mkt.get('volume', 0)
+                        p_bid = p_mkt.get('bid_qty', 0)
                         put_oi_map[strike] = p_oi
                         p_pct = p_mkt.get('p_change', 0.0)
                         if not p_pct or p_pct == 0:
@@ -130,13 +141,15 @@ def fetch_complete_market_data(token):
                         put_pct_map[strike] = round(float(p_pct), 1)
 
                     table_data.append({
+                        "Call Bid Qty": c_bid,
                         "Call Volume": c_vol,
                         "Call OI Change %": f"+{call_pct_map.get(strike, 0)}%",
                         "Call Total OI": call_oi_map.get(strike, 0),
                         "Strike Price": strike,
                         "Put Total OI": put_oi_map.get(strike, 0),
                         "Put OI Change %": f"+{put_pct_map.get(strike, 0)}%",
-                        "Put Volume": p_vol
+                        "Put Volume": p_vol,
+                        "Put Bid Qty": p_bid
                     })
 
         top_calls = sorted(call_pct_map.items(), key=lambda x: x[1], reverse=True)[:5]
@@ -197,11 +210,11 @@ if active_token:
             
         st.markdown("---")
         
-        st.subheader("📋 ATM Option Chain Overview with Volume & Unwinding")
+        st.subheader("📋 ATM Option Chain Overview with Bid Pressure & Volume")
         if not df.empty:
             st.dataframe(df, use_container_width=True, hide_index=True)
             
-            st.markdown("### 🎯 Live Volume + Unwinding Signal")
+            st.markdown("### 🎯 Live Bid Pressure + Unwinding Signal")
             signal_text, signal_type = get_trading_signal(df, spot)
             if signal_type == "success":
                 st.success(signal_text)
@@ -266,3 +279,4 @@ if active_token:
 
 else:
     st.info("👈 Left Sidebar mein apna Upstox Access Token paste karke Connect karein.")
+        

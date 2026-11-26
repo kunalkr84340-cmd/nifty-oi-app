@@ -30,6 +30,23 @@ if st.sidebar.button("Connect & Save"):
         st.rerun()
 
 active_token = query_params.get("token", "")
+VIX_DIVISOR = 19.10  # Approx sqrt(365)
+
+
+def calculate_vix_range(spot_price, vix_val, divisor=19.10):
+    base_unit = spot_price / divisor
+    daily_move_pct = vix_val / divisor
+    expected_points = spot_price * (vix_val / 100.0) / divisor
+    expected_high = round(spot_price + expected_points, 2)
+    expected_low = round(spot_price - expected_points, 2)
+    return {
+        "base_unit": round(base_unit, 2),
+        "daily_move_pct": round(daily_move_pct, 2),
+        "expected_points": round(expected_points, 2),
+        "expected_high": expected_high,
+        "expected_low": expected_low
+    }
+
 
 # --- UNWINDING + VOLUME + BID PRESSURE SIGNAL FUNCTION ---
 def get_trading_signal(df, spot_price):
@@ -82,12 +99,20 @@ def fetch_complete_market_data(token):
         'Authorization': f'Bearer {token}'
     }
     try:
-        spot_url = "https://api.upstox.com/v2/market-quote/quotes?instrument_key=NSE_INDEX|Nifty 50"
-        spot_res = requests.get(spot_url, headers=headers).json()
-        if spot_res.get('status') != 'success':
+        quote_url = "https://api.upstox.com/v2/market-quote/quotes?instrument_key=NSE_INDEX|Nifty 50,NSE_INDEX|India VIX"
+        quote_res = requests.get(quote_url, headers=headers).json()
+        if quote_res.get('status') != 'success':
             return None, "Invalid Access Token or Expired Token."
-            
-        spot_price = spot_res['data']['NSE_INDEX:Nifty 50']['last_price']
+
+        quote_data = quote_res.get('data', {})
+        nifty_quote = quote_data.get('NSE_INDEX:Nifty 50') or quote_data.get('NSE_INDEX|Nifty 50')
+        if not nifty_quote or 'last_price' not in nifty_quote:
+            return None, "Nifty 50 live quote data nahi mil paaya."
+
+        spot_price = float(nifty_quote['last_price'])
+
+        vix_quote = quote_data.get('NSE_INDEX:India VIX') or quote_data.get('NSE_INDEX|India VIX')
+        live_vix = float(vix_quote['last_price']) if vix_quote and vix_quote.get('last_price') is not None else 15.0
 
         today_date = datetime.now().strftime("%Y-%m-%d")
         candle_url = f"https://api.upstox.com/v2/historical-candle/NSE_INDEX|Nifty 50/minute/5/{today_date}"
@@ -160,6 +185,7 @@ def fetch_complete_market_data(token):
 
         return {
             "spot": spot_price,
+            "vix": live_vix,
             "candles": candles,
             "top_calls": top_calls,
             "top_puts": top_puts,
@@ -178,6 +204,7 @@ if active_token:
         st.error(f"⚠️ Status: {err}")
     else:
         spot = data['spot']
+        live_vix = data['vix']
         candles = data['candles']
         top_calls = data['top_calls']
         top_puts = data['top_puts']
@@ -188,13 +215,22 @@ if active_token:
         pivot_level = (call_wall + put_wall) / 2
         tot_call_pct = sum([v for k, v in top_calls])
         tot_put_pct = sum([v for k, v in top_puts])
+        vix_range = calculate_vix_range(spot, live_vix, VIX_DIVISOR)
         
-        st.success(f"⚡ Live Connected! Nifty Spot Price: **{spot}**")
+        st.success(f"⚡ Live Connected! Nifty Spot: **{spot}** | Live India VIX: **{live_vix}**")
         
         m1, m2, m3 = st.columns(3)
         m1.metric("Major Call Resistance", f"{call_wall}")
         m2.metric("Calculated Pivot Level", f"{pivot_level}")
         m3.metric("Major Put Support", f"{put_wall}")
+        
+        st.markdown("---")
+        st.subheader(f"📐 Auto VIX Volatility Range (Live VIX: {live_vix} ÷ {VIX_DIVISOR})")
+        vr1, vr2, vr3, vr4 = st.columns(4)
+        vr1.metric("Expected Low", f"{vix_range['expected_low']}", delta=f"-{vix_range['expected_points']} pts")
+        vr2.metric("Expected High", f"{vix_range['expected_high']}", delta=f"+{vix_range['expected_points']} pts")
+        vr3.metric("Daily Move Est.", f"±{vix_range['expected_points']} pts", delta=f"{vix_range['daily_move_pct']}%")
+        vr4.metric("Spot ÷ 19.10", f"{vix_range['base_unit']}", help="Spot price divided by 19.10")
         
         st.markdown("---")
         
@@ -265,6 +301,9 @@ if active_token:
             closes = [c[4] for c in candles[:30]][::-1]
 
             fig = go.Figure(data=[go.Candlestick(x=times, open=opens, high=highs, low=lows, close=closes, name="Nifty 5M")])
+
+            fig.add_hline(y=vix_range['expected_high'], line_color="orange", line_dash="dot", annotation_text=f"VIX HIGH ({vix_range['expected_high']})")
+            fig.add_hline(y=vix_range['expected_low'], line_color="violet", line_dash="dot", annotation_text=f"VIX LOW ({vix_range['expected_low']})")
 
             if st.session_state.locked_signal != "NEUTRAL":
                 fig.add_hline(y=st.session_state.locked_entry, line_color="cyan", line_dash="dash", annotation_text=f"ENTRY ({st.session_state.locked_entry})")
